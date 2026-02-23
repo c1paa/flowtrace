@@ -1,21 +1,14 @@
-//
-//  ContentView.swift
-//  flowtrace
-//
-//  Created by Vlad Glazunov on 23.02.2026.
-//
-
 import SwiftUI
 
 struct ContentView: View {
+    @State private var store: ProjectStore? = nil
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        if let store = store {
+            WorkspaceView(store: store)
+        } else {
+            ProjectListView(store: $store)
         }
-        .padding()
     }
 }
 
