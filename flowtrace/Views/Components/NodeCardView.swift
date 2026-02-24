@@ -7,6 +7,11 @@ struct NodeCardView: View {
     let isHighlighted: Bool
     let isDimmed: Bool
     let isTimerActive: Bool
+    // Change 2: Compact / Expanded mode
+    var showDetails: Bool = false
+    // Change 5: Group progress
+    var groupCompleted: Int = 0
+    var groupTotal: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -52,7 +57,7 @@ struct NodeCardView: View {
                     .foregroundStyle(statusColor)
             }
 
-            // Checklist progress
+            // Checklist progress (for nodes with checklist items)
             if !node.checklistItems.isEmpty {
                 let completed = node.checklistItems.filter { $0.isCompleted }.count
                 let total = node.checklistItems.count
@@ -63,6 +68,39 @@ struct NodeCardView: View {
                     Text("\(completed)/\(total)")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            // Change 5: Group task progress bar
+            if node.type == .group && groupTotal > 0 {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(groupCompleted), total: Double(groupTotal))
+                        .progressViewStyle(.linear)
+                        .frame(height: 4)
+                    Text("\(groupCompleted)/\(groupTotal)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Change 2: Expanded detail content
+            if showDetails {
+                if !node.description.isEmpty {
+                    Text(node.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                ForEach(Array(node.checklistItems.prefix(5))) { item in
+                    HStack(spacing: 4) {
+                        Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(item.isCompleted ? .green : .secondary)
+                        Text(item.text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
         }

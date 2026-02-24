@@ -131,6 +131,21 @@ class ProjectStore {
         return result
     }
 
+    func effectiveTimeEstimate(for nodeId: UUID) -> Double? {
+        guard let node = state.nodes[nodeId.uuidString] else { return nil }
+        if node.type == .group {
+            let sums = node.childrenIds.compactMap { effectiveTimeEstimate(for: $0) }
+            return sums.isEmpty ? nil : sums.reduce(0, +)
+        }
+        return node.timeEstimate
+    }
+
+    func groupProgress(for nodeId: UUID) -> (completed: Int, total: Int) {
+        let descs = allDescendants(of: nodeId)
+        let tasks = descs.compactMap { state.nodes[$0.uuidString] }.filter { $0.type == .task }
+        return (tasks.filter { $0.status == .done }.count, tasks.count)
+    }
+
     var availableNextTasks: [ProjectNode] {
         state.nodes.values.filter { node in
             guard node.status == .todo || node.status == .doing else { return false }
@@ -158,6 +173,12 @@ class ProjectStore {
             state.nodes[pid.uuidString]?.childrenIds.append(node.id)
         } else if state.rootNodeId == nil {
             state.rootNodeId = node.id.uuidString
+        }
+
+        // Auto-detect: if a milestone is added to a group, mark it as the group's output milestone
+        if type == .milestone, let pid = parentId,
+           let parentNode = state.nodes[pid.uuidString], parentNode.type == .group {
+            state.nodes[pid.uuidString]?.outputMilestoneId = node.id
         }
 
         state.updatedAt = Date()

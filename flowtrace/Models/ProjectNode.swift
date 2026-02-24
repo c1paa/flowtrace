@@ -74,6 +74,7 @@ struct ProjectNode: Codable, Identifiable {
     var isExpanded: Bool
     var checklistItems: [ChecklistItem]
     var notes: String
+    var outputMilestoneId: UUID?
     let createdAt: Date
     var updatedAt: Date
 
@@ -95,6 +96,7 @@ struct ProjectNode: Codable, Identifiable {
         self.isExpanded = true
         self.checklistItems = []
         self.notes = ""
+        self.outputMilestoneId = nil
         self.createdAt = Date()
         self.updatedAt = Date()
     }

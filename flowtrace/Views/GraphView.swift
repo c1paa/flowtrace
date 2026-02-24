@@ -6,6 +6,7 @@ struct GraphView: View {
     @State private var scale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var layout: GraphLayoutEngine.LayoutResult = .init(positions: [:], canvasSize: .zero)
+    @State private var graphExpandedMode = false
     private let engine = GraphLayoutEngine()
 
     var body: some View {
@@ -88,6 +89,12 @@ struct GraphView: View {
                 Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
             }
             .buttonStyle(.bordered)
+            // Change 2: Compact / Expanded mode toggle
+            Button { graphExpandedMode.toggle() } label: {
+                Image(systemName: "rectangle.expand.vertical")
+            }
+            .buttonStyle(.bordered)
+            .tint(graphExpandedMode ? .blue : nil)
         }
         .padding(8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -102,13 +109,17 @@ struct GraphView: View {
             let isHighlighted = highlighted.contains(node.id)
             let isDimmed = !highlighted.isEmpty && !isHighlighted && !isSelected
             let isTimerActive = store.activeTimerNodeId == node.id
+            let progress = store.groupProgress(for: node.id)
 
             NodeCardView(node: node,
                         color: color,
                         isSelected: isSelected,
                         isHighlighted: isHighlighted,
                         isDimmed: isDimmed,
-                        isTimerActive: isTimerActive)
+                        isTimerActive: isTimerActive,
+                        showDetails: graphExpandedMode,
+                        groupCompleted: progress.completed,
+                        groupTotal: progress.total)
                 .position(x: pos.x + 100, y: pos.y + 32) // offset by half card size
                 .onTapGesture {
                     store.selectedNodeId = node.id
@@ -138,6 +149,11 @@ struct GraphView: View {
         Button("Mark In Progress") { store.setStatus(nodeId: node.id, status: .doing) }
         Button("Mark To Do") { store.setStatus(nodeId: node.id, status: .todo) }
         Divider()
+        // Change 9: Color context menu item — selecting the node opens the color picker in NodeDetailView
+        Button("Set Color...") {
+            store.selectedNodeId = node.id
+        }
+        Divider()
         Button("Delete", role: .destructive) {
             store.deleteNode(id: node.id)
             recomputeLayout()
@@ -165,6 +181,31 @@ struct GraphView: View {
         layout = engine.layout(nodes: store.state.nodes, rootId: rootId)
     }
 
+    // Change 1: Smart endpoint routing for dependency edges
+    private func smartEndpoints(fromPos: CGPoint, toPos: CGPoint) -> (exit: CGPoint, entry: CGPoint) {
+        let nodeW: CGFloat = 200
+        let nodeH: CGFloat = 64
+        let dx = toPos.x - fromPos.x
+        let dy = toPos.y - fromPos.y
+        if abs(dx) >= abs(dy) {
+            if dx >= 0 {
+                return (CGPoint(x: fromPos.x + nodeW, y: fromPos.y + nodeH / 2),
+                        CGPoint(x: toPos.x, y: toPos.y + nodeH / 2))
+            } else {
+                return (CGPoint(x: fromPos.x, y: fromPos.y + nodeH / 2),
+                        CGPoint(x: toPos.x + nodeW, y: toPos.y + nodeH / 2))
+            }
+        } else {
+            if dy >= 0 {
+                return (CGPoint(x: fromPos.x + nodeW / 2, y: fromPos.y + nodeH),
+                        CGPoint(x: toPos.x + nodeW / 2, y: toPos.y))
+            } else {
+                return (CGPoint(x: fromPos.x + nodeW / 2, y: fromPos.y),
+                        CGPoint(x: toPos.x + nodeW / 2, y: toPos.y + nodeH))
+            }
+        }
+    }
+
     private func drawEdges(ctx: GraphicsContext, size: CGSize) {
         // Parent → child edges (straight)
         for (_, node) in store.state.nodes {
@@ -190,30 +231,76 @@ struct GraphView: View {
                 }()
 
                 ctx.stroke(path, with: .color(color), lineWidth: 1.5)
-
-                // Arrow head
                 drawArrowHead(ctx: ctx, at: childTop, from: parentCenter, color: color)
             }
         }
 
-        // Dependency edges (curved, different color)
+        // Change 1: Dependency edges with smart routing
         for (_, node) in store.state.nodes {
             for depId in node.dependencyIds {
                 guard let fromPos = layout.positions[depId],
                       let toPos = layout.positions[node.id] else { continue }
 
-                let fromCenter = CGPoint(x: fromPos.x + 200, y: fromPos.y + 32)
-                let toCenter = CGPoint(x: toPos.x, y: toPos.y + 32)
+                let endpoints = smartEndpoints(fromPos: fromPos, toPos: toPos)
+                let dx = toPos.x - fromPos.x
+                let dy = toPos.y - fromPos.y
+                let offset: CGFloat = 40.0
+
+                let cp1: CGPoint
+                let cp2: CGPoint
+                if abs(dx) >= abs(dy) {
+                    let sign: CGFloat = dx >= 0 ? 1 : -1
+                    cp1 = CGPoint(x: endpoints.exit.x + offset * sign, y: endpoints.exit.y)
+                    cp2 = CGPoint(x: endpoints.entry.x - offset * sign, y: endpoints.entry.y)
+                } else {
+                    let sign: CGFloat = dy >= 0 ? 1 : -1
+                    cp1 = CGPoint(x: endpoints.exit.x, y: endpoints.exit.y + offset * sign)
+                    cp2 = CGPoint(x: endpoints.entry.x, y: endpoints.entry.y - offset * sign)
+                }
 
                 var path = Path()
-                path.move(to: fromCenter)
-                let cp1 = CGPoint(x: fromCenter.x + 40, y: fromCenter.y)
-                let cp2 = CGPoint(x: toCenter.x - 40, y: toCenter.y)
-                path.addCurve(to: toCenter, control1: cp1, control2: cp2)
+                path.move(to: endpoints.exit)
+                path.addCurve(to: endpoints.entry, control1: cp1, control2: cp2)
 
                 let isDependentHighlighted = store.selectedNodeId == depId || store.selectedNodeId == node.id
                 let color: Color = isDependentHighlighted ? .orange : Color(nsColor: .systemOrange).opacity(0.4)
                 ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                drawArrowHead(ctx: ctx, at: endpoints.entry, from: cp2, color: color)
+            }
+        }
+
+        // Change 4: Milestone convergence arrows from group children to output milestone
+        for (_, node) in store.state.nodes {
+            guard node.type == .group, let milestoneId = node.outputMilestoneId else { continue }
+            guard let milestonePos = layout.positions[milestoneId] else { continue }
+
+            for childId in node.childrenIds {
+                guard let childNode = store.state.nodes[childId.uuidString],
+                      childNode.type != .milestone,
+                      let childPos = layout.positions[childId] else { continue }
+
+                let endpoints = smartEndpoints(fromPos: childPos, toPos: milestonePos)
+                let dx = milestonePos.x - childPos.x
+                let dy = milestonePos.y - childPos.y
+                let offset: CGFloat = 30.0
+
+                let cp1: CGPoint
+                let cp2: CGPoint
+                if abs(dx) >= abs(dy) {
+                    let sign: CGFloat = dx >= 0 ? 1 : -1
+                    cp1 = CGPoint(x: endpoints.exit.x + offset * sign, y: endpoints.exit.y)
+                    cp2 = CGPoint(x: endpoints.entry.x - offset * sign, y: endpoints.entry.y)
+                } else {
+                    let sign: CGFloat = dy >= 0 ? 1 : -1
+                    cp1 = CGPoint(x: endpoints.exit.x, y: endpoints.exit.y + offset * sign)
+                    cp2 = CGPoint(x: endpoints.entry.x, y: endpoints.entry.y - offset * sign)
+                }
+
+                var path = Path()
+                path.move(to: endpoints.exit)
+                path.addCurve(to: endpoints.entry, control1: cp1, control2: cp2)
+                ctx.stroke(path, with: .color(Color.gray.opacity(0.3)),
+                           style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
         }
     }

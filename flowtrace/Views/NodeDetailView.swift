@@ -91,6 +91,21 @@ struct NodeDetailView: View {
                 }
             }
             .pickerStyle(.segmented)
+
+            // Change 4: Output milestone display for group nodes
+            if node.type == .group, let milestoneId = node.outputMilestoneId,
+               let milestone = store.node(for: milestoneId) {
+                HStack(spacing: 6) {
+                    Image(systemName: "diamond.fill")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                    Text("Output Milestone:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(milestone.title)
+                        .font(.caption.bold())
+                }
+            }
         }
     }
 
@@ -144,14 +159,30 @@ struct NodeDetailView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Estimate").font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        TextField("hours", value: Binding(
-                            get: { node.timeEstimate ?? 0 },
-                            set: { newVal in store.updateNode(id: nodeId) { $0.timeEstimate = newVal > 0 ? newVal : nil } }
-                        ), format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 70)
-                        Text("h").foregroundStyle(.secondary)
+                    // Change 3: groups show computed sum (read-only); other nodes keep the text field
+                    if node.type == .group {
+                        if let sum = store.effectiveTimeEstimate(for: nodeId) {
+                            HStack(spacing: 4) {
+                                Text(String(format: "%.1fh", sum))
+                                    .font(.headline)
+                                Text("(sum)")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        } else {
+                            Text("—")
+                                .foregroundStyle(.tertiary)
+                        }
+                    } else {
+                        HStack {
+                            TextField("hours", value: Binding(
+                                get: { node.timeEstimate ?? 0 },
+                                set: { newVal in store.updateNode(id: nodeId) { $0.timeEstimate = newVal > 0 ? newVal : nil } }
+                            ), format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 70)
+                            Text("h").foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -161,7 +192,10 @@ struct NodeDetailView: View {
                     Text("Actual").font(.caption).foregroundStyle(.secondary)
                     Text(String(format: "%.2fh", node.timeActual))
                         .font(.headline)
-                    if let est = node.timeEstimate, est > 0 {
+                    let effectiveEst: Double? = node.type == .group
+                        ? store.effectiveTimeEstimate(for: nodeId)
+                        : node.timeEstimate
+                    if let est = effectiveEst, est > 0 {
                         let ratio = node.timeActual / est
                         Text(String(format: "%.0f%% of est.", ratio * 100))
                             .font(.caption2)
