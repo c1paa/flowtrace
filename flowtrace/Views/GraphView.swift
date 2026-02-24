@@ -56,6 +56,7 @@ struct GraphView: View {
         .onAppear { recomputeLayout() }
         .onChange(of: store.state.nodes.count) { recomputeLayout() }
         .onChange(of: store.state.rootNodeId) { recomputeLayout() }
+        .onChange(of: graphExpandedMode) { recomputeLayout() }
     }
 
     private var emptyState: some View {
@@ -119,7 +120,8 @@ struct GraphView: View {
                         isTimerActive: isTimerActive,
                         showDetails: graphExpandedMode,
                         groupCompleted: progress.completed,
-                        groupTotal: progress.total)
+                        groupTotal: progress.total,
+                        onStatusTap: { store.cycleStatus(nodeId: node.id) })
                 .position(x: pos.x + 100, y: pos.y + 32) // offset by half card size
                 .onTapGesture {
                     store.selectedNodeId = node.id
@@ -178,7 +180,8 @@ struct GraphView: View {
             layout = .init(positions: [:], canvasSize: .zero)
             return
         }
-        layout = engine.layout(nodes: store.state.nodes, rootId: rootId)
+        layout = engine.layout(nodes: store.state.nodes, rootId: rootId,
+                               expandedNodeH: graphExpandedMode ? 160 : 64)
     }
 
     // Change 1: Smart endpoint routing for dependency edges
@@ -265,7 +268,7 @@ struct GraphView: View {
                 let isDependentHighlighted = store.selectedNodeId == depId || store.selectedNodeId == node.id
                 let color: Color = isDependentHighlighted ? .orange : Color(nsColor: .systemOrange).opacity(0.4)
                 ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                drawArrowHead(ctx: ctx, at: endpoints.entry, from: cp2, color: color)
+                drawArrowHead(ctx: ctx, at: endpoints.exit, from: cp1, color: color)
             }
         }
 

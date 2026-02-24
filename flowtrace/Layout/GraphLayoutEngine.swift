@@ -12,7 +12,7 @@ class GraphLayoutEngine {
         var canvasSize: CGSize
     }
 
-    func layout(nodes: [String: ProjectNode], rootId: UUID) -> LayoutResult {
+    func layout(nodes: [String: ProjectNode], rootId: UUID, expandedNodeH: CGFloat = 64) -> LayoutResult {
         guard nodes[rootId.uuidString] != nil else {
             return LayoutResult(positions: [:], canvasSize: .zero)
         }
@@ -27,6 +27,7 @@ class GraphLayoutEngine {
         assignPositions(nodeId: rootId, nodes: nodes,
                         widths: subtreeWidths,
                         x: 0, y: 0,
+                        expandedNodeH: expandedNodeH,
                         positions: &positions)
 
         // Normalize so minimum x and y are at margin
@@ -41,7 +42,7 @@ class GraphLayoutEngine {
         }
 
         let maxX = normalizedPositions.values.map { $0.x + nodeW }.max() ?? 0
-        let maxY = normalizedPositions.values.map { $0.y + nodeH }.max() ?? 0
+        let maxY = normalizedPositions.values.map { $0.y + expandedNodeH }.max() ?? 0
         let canvasSize = CGSize(width: maxX + margin, height: maxY + margin)
 
         return LayoutResult(positions: normalizedPositions, canvasSize: canvasSize)
@@ -77,6 +78,7 @@ class GraphLayoutEngine {
     private func assignPositions(nodeId: UUID, nodes: [String: ProjectNode],
                                  widths: [UUID: CGFloat],
                                  x: CGFloat, y: CGFloat,
+                                 expandedNodeH: CGFloat,
                                  positions: inout [UUID: CGPoint]) {
         guard let node = nodes[nodeId.uuidString] else { return }
 
@@ -89,13 +91,14 @@ class GraphLayoutEngine {
 
         // Lay out children side by side
         var childX = x
-        let childY = y + nodeH + vGap
+        let childY = y + expandedNodeH + vGap
 
         for childId in node.childrenIds {
             let childW = widths[childId] ?? nodeW
             assignPositions(nodeId: childId, nodes: nodes,
                             widths: widths,
                             x: childX, y: childY,
+                            expandedNodeH: expandedNodeH,
                             positions: &positions)
             childX += childW + hGap
         }

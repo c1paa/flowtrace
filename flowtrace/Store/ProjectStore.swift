@@ -36,6 +36,7 @@ class ProjectStore {
     var activeTimerNodeId: UUID?
     var timerStartTime: Date?
     var events: [Event] = []
+    var timelineHoursPerPoint: Double = 0.5
 
     private var saveTask: Task<Void, Never>?
 
@@ -175,7 +176,26 @@ class ProjectStore {
             state.rootNodeId = node.id.uuidString
         }
 
-        // Auto-detect: if a milestone is added to a group, mark it as the group's output milestone
+        // Auto-milestone: when a group is created, add a "Done" milestone as its output
+        if type == .group {
+            let ms = ProjectNode(title: "\(title) Done", type: .milestone, parentId: node.id)
+            state.nodes[ms.id.uuidString] = ms
+            state.nodes[node.id.uuidString]?.childrenIds.append(ms.id)
+            state.nodes[node.id.uuidString]?.outputMilestoneId = ms.id
+        }
+
+        // Non-milestone child of a group with outputMilestoneId → keep milestone last + milestone depends on new node
+        if type != .milestone, let pid = parentId,
+           let milestoneId = state.nodes[pid.uuidString]?.outputMilestoneId {
+            state.nodes[pid.uuidString]?.childrenIds.removeAll { $0 == milestoneId }
+            state.nodes[pid.uuidString]?.childrenIds.append(milestoneId)
+            if !(state.nodes[milestoneId.uuidString]?.dependencyIds.contains(node.id) ?? false) {
+                state.nodes[milestoneId.uuidString]?.dependencyIds.append(node.id)
+                state.nodes[milestoneId.uuidString]?.updatedAt = Date()
+            }
+        }
+
+        // Auto-detect: if a milestone is manually added to a group, mark it as the group's output milestone
         if type == .milestone, let pid = parentId,
            let parentNode = state.nodes[pid.uuidString], parentNode.type == .group {
             state.nodes[pid.uuidString]?.outputMilestoneId = node.id
@@ -242,6 +262,52 @@ class ProjectStore {
                          summary: "\(node.title): \(old.label) -> \(status.label)",
                          previousValue: old.rawValue, newValue: status.rawValue)
         appendEventAndSave(event)
+        // Propagate status upward through parent groups
+        if let parentId = state.nodes[nodeId.uuidString]?.parentId {
+            propagateGroupStatus(groupId: parentId)
+        }
+    }
+
+    func cycleStatus(nodeId: UUID) {
+        guard let node = state.nodes[nodeId.uuidString] else { return }
+        let next: NodeStatus
+        switch node.status {
+        case .todo: next = .doing
+        case .doing: next = .done
+        case .done: next = .todo
+        }
+        setStatus(nodeId: nodeId, status: next)
+    }
+
+    private func propagateGroupStatus(groupId: UUID) {
+        guard let group = state.nodes[groupId.uuidString], group.type == .group else { return }
+        let milestoneId = group.outputMilestoneId
+        let nonMilestoneChildren = group.childrenIds
+            .compactMap { state.nodes[$0.uuidString] }
+            .filter { $0.type != .milestone }
+        guard !nonMilestoneChildren.isEmpty else { return }
+
+        let newStatus: NodeStatus
+        if nonMilestoneChildren.allSatisfy({ $0.status == .done }) {
+            newStatus = .done
+        } else if nonMilestoneChildren.contains(where: { $0.status == .doing || $0.status == .done }) {
+            newStatus = .doing
+        } else {
+            newStatus = .todo
+        }
+
+        state.nodes[groupId.uuidString]?.status = newStatus
+        state.nodes[groupId.uuidString]?.updatedAt = Date()
+        if let msId = milestoneId {
+            state.nodes[msId.uuidString]?.status = newStatus
+            state.nodes[msId.uuidString]?.updatedAt = Date()
+        }
+        state.updatedAt = Date()
+
+        // Continue upward
+        if let parentId = group.parentId, let parent = state.nodes[parentId.uuidString], parent.type == .group {
+            propagateGroupStatus(groupId: parentId)
+        }
     }
 
     func toggleChecklistItem(nodeId: UUID, itemId: UUID) {

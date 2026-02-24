@@ -10,16 +10,15 @@ private struct TimelineItem: Identifiable {
     let color: Color
     // Change 7: color of direct parent group for accent stripe
     let groupColor: Color?
+    let isGroup: Bool
 
     var hasExpandContent: Bool {
-        !node.description.isEmpty || !node.checklistItems.isEmpty
+        !isGroup && (!node.description.isEmpty || !node.checklistItems.isEmpty)
     }
 }
 
 struct TimelineView: View {
     @Bindable var store: ProjectStore
-    // Change 6: extended zoom range (1/200 … 5.0 hoursPerPoint)
-    @State private var hoursPerPoint: Double = 0.5
     @State private var items: [TimelineItem] = []
     // Change 10: expandable rows
     @State private var expandedItems: Set<UUID> = []
@@ -41,14 +40,12 @@ struct TimelineView: View {
                 Label("Scale", systemImage: "arrow.left.and.right")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                // Change 6: max is now 5.0
-                Button { hoursPerPoint = min(5.0, hoursPerPoint * 1.5) } label: {
+                Button { store.timelineHoursPerPoint = min(5.0, store.timelineHoursPerPoint * 1.5) } label: {
                     Image(systemName: "minus.magnifyingglass")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                // Change 6: min is now 1/200
-                Button { hoursPerPoint = max(1.0 / 200.0, hoursPerPoint / 1.5) } label: {
+                Button { store.timelineHoursPerPoint = max(1.0 / 200.0, store.timelineHoursPerPoint / 1.5) } label: {
                     Image(systemName: "plus.magnifyingglass")
                 }
                 .buttonStyle(.bordered)
@@ -106,7 +103,7 @@ struct TimelineView: View {
 
     private var timelineContent: some View {
         let totalDuration = items.map { $0.startHour + $0.durationHour }.max() ?? 1.0
-        let ptsPerHour = 1.0 / hoursPerPoint
+        let ptsPerHour = 1.0 / store.timelineHoursPerPoint
         let contentWidth = labelWidth + CGFloat(totalDuration) * ptsPerHour + 40
 
         // Change 10: account for expanded row extra height
@@ -131,7 +128,8 @@ struct TimelineView: View {
                     path.move(to: CGPoint(x: x, y: 0))
                     path.addLine(to: CGPoint(x: x, y: size.height))
                     ctx.stroke(path, with: .color(Color.secondary.opacity(0.15)), lineWidth: 1)
-                    if ptsPerHour > 2 {
+                    let gapPts = CGFloat(stride) * CGFloat(ptsPerHour)
+                    if gapPts > 30 {
                         let label = gridLabel(for: h, stride: stride)
                         ctx.draw(Text(label).font(.system(size: 9)).foregroundStyle(.secondary),
                                  at: CGPoint(x: x + 2, y: 4))
@@ -182,48 +180,51 @@ struct TimelineView: View {
                             // Bar
                             ZStack(alignment: .leading) {
                                 // Base fill
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(item.color.opacity(item.node.status == .done ? 0.5 : 0.85))
+                                RoundedRectangle(cornerRadius: item.isGroup ? 2 : 4)
+                                    .fill(item.color.opacity(item.isGroup ? 0.35 : (item.node.status == .done ? 0.5 : 0.85)))
 
-                                // Change 8: active timer progress overlay
-                                if item.id == store.activeTimerNodeId,
-                                   let est = item.node.timeEstimate, est > 0,
-                                   let startTime = store.timerStartTime {
-                                    GeometryReader { geo in
-                                        Rectangle()
-                                            .fill(Color.white.opacity(0.3))
-                                            .frame(width: max(0, geo.size.width * CGFloat(min(1.0, tick.timeIntervalSince(startTime) / 3600.0 / est))))
+                                if !item.isGroup {
+                                    // Change 8: active timer progress overlay
+                                    if item.id == store.activeTimerNodeId,
+                                       let est = item.node.timeEstimate, est > 0,
+                                       let startTime = store.timerStartTime {
+                                        GeometryReader { geo in
+                                            Rectangle()
+                                                .fill(Color.white.opacity(0.3))
+                                                .frame(width: max(0, geo.size.width * CGFloat(min(1.0, tick.timeIntervalSince(startTime) / 3600.0 / est))))
+                                        }
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                                }
 
-                                // Done overlay
-                                if item.node.status == .done {
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(Color.green.opacity(0.3))
-                                }
+                                    // Done overlay
+                                    if item.node.status == .done {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(Color.green.opacity(0.3))
+                                    }
 
-                                // Duration label
-                                HStack {
-                                    Text(String(format: "%.1fh", item.durationHour))
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundStyle(.white)
-                                        .padding(.leading, 6)
-                                    Spacer()
-                                }
-
-                                // Change 7: group color accent stripe on left edge
-                                if let gc = item.groupColor {
-                                    HStack(spacing: 0) {
-                                        Rectangle()
-                                            .fill(gc)
-                                            .frame(width: 3)
+                                    // Duration label
+                                    HStack {
+                                        Text(String(format: "%.1fh", item.durationHour))
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.white)
+                                            .padding(.leading, 6)
                                         Spacer()
                                     }
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                                    // Change 7: group color accent stripe on left edge
+                                    if let gc = item.groupColor {
+                                        HStack(spacing: 0) {
+                                            Rectangle()
+                                                .fill(gc)
+                                                .frame(width: 3)
+                                            Spacer()
+                                        }
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
                                 }
                             }
-                            .frame(width: max(4, CGFloat(item.durationHour) * ptsPerHour), height: rowHeight - 8)
+                            .frame(width: max(4, CGFloat(item.durationHour) * ptsPerHour),
+                                   height: item.isGroup ? 4 : (rowHeight - 8))
                             .onTapGesture { store.selectedNodeId = item.id }
 
                             Spacer()
@@ -272,35 +273,58 @@ struct TimelineView: View {
 
         var result: [TimelineItem] = []
         var nodeEndTimes: [UUID: Double] = [:]
+        var nodeStartTimes: [UUID: Double] = [:]
 
         func process(nodeId: UUID, depth: Int) {
             guard let node = store.state.nodes[nodeId.uuidString] else { return }
 
             let depEnd = node.dependencyIds.compactMap { nodeEndTimes[$0] }.max() ?? 0
             let start = depEnd
-            let duration = node.timeEstimate ?? node.timeActual
+            nodeStartTimes[nodeId] = start
 
-            // Change 7: compute group color for accent stripe
-            let groupColor: Color? = {
-                guard let pid = node.parentId,
-                      let parent = store.state.nodes[pid.uuidString],
-                      parent.type == .group else { return nil }
-                return store.resolvedColor(for: pid)
-            }()
-
-            if duration > 0 || node.checklistItems.count > 0 {
-                let dur = max(duration, 0.25)
-                let color = store.resolvedColor(for: nodeId)
-                result.append(TimelineItem(id: nodeId, node: node, startHour: start,
-                                           durationHour: dur, depth: depth, color: color,
-                                           groupColor: groupColor))
-                nodeEndTimes[nodeId] = start + dur
+            if node.type == .group {
+                // Process children first so we can compute span
+                let insertionIdx = result.count
+                for childId in node.childrenIds {
+                    process(nodeId: childId, depth: depth + 1)
+                }
+                // Compute spanning bar from all descendants
+                let descendants = store.allDescendants(of: nodeId)
+                let spanStart = descendants.compactMap { nodeStartTimes[$0] }.min() ?? start
+                let spanEnd = descendants.compactMap { nodeEndTimes[$0] }.max() ?? start
+                if spanEnd > spanStart {
+                    let color = store.resolvedColor(for: nodeId)
+                    let item = TimelineItem(id: nodeId, node: node, startHour: spanStart,
+                                           durationHour: spanEnd - spanStart, depth: depth,
+                                           color: color, groupColor: nil, isGroup: true)
+                    result.insert(item, at: insertionIdx)
+                }
+                nodeEndTimes[nodeId] = spanEnd > spanStart ? spanEnd : start
             } else {
-                nodeEndTimes[nodeId] = start
-            }
+                let duration = node.timeEstimate ?? node.timeActual
 
-            for childId in node.childrenIds {
-                process(nodeId: childId, depth: depth + 1)
+                // Change 7: compute group color for accent stripe
+                let groupColor: Color? = {
+                    guard let pid = node.parentId,
+                          let parent = store.state.nodes[pid.uuidString],
+                          parent.type == .group else { return nil }
+                    return store.resolvedColor(for: pid)
+                }()
+
+                if duration > 0 || node.checklistItems.count > 0 {
+                    let dur = max(duration, 0.25)
+                    let color = store.resolvedColor(for: nodeId)
+                    result.append(TimelineItem(id: nodeId, node: node, startHour: start,
+                                               durationHour: dur, depth: depth, color: color,
+                                               groupColor: groupColor, isGroup: false))
+                    nodeEndTimes[nodeId] = start + dur
+                } else {
+                    nodeEndTimes[nodeId] = start
+                }
+
+                for childId in node.childrenIds {
+                    process(nodeId: childId, depth: depth + 1)
+                }
             }
         }
 

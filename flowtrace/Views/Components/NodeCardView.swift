@@ -12,6 +12,7 @@ struct NodeCardView: View {
     // Change 5: Group progress
     var groupCompleted: Int = 0
     var groupTotal: Int = 0
+    var onStatusTap: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -55,6 +56,7 @@ struct NodeCardView: View {
                 Image(systemName: node.status.icon)
                     .font(.system(size: 11))
                     .foregroundStyle(statusColor)
+                    .onTapGesture { onStatusTap?() }
             }
 
             // Checklist progress (for nodes with checklist items)

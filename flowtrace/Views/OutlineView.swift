@@ -36,6 +36,9 @@ struct OutlineView: View {
                                   editingTitle: $editingTitle)
                 }
                 .listStyle(.sidebar)
+                .onDeleteCommand {
+                    if let id = store.selectedNodeId { store.deleteNode(id: id) }
+                }
             } else {
                 VStack {
                     Spacer()
