@@ -37,8 +37,11 @@ class ProjectStore {
     var timerStartTime: Date?
     var events: [Event] = []
     var timelineHoursPerPoint: Double = 0.5
+    var showProjectSettings: Bool = false
 
     private var saveTask: Task<Void, Never>?
+    private var undoStack: [ProjectState] = []
+    var canUndo: Bool { !undoStack.isEmpty }
 
     // MARK: - Derived URLs
     var projectStateURL: URL { projectURL.appendingPathComponent("project.json") }
@@ -78,14 +81,14 @@ class ProjectStore {
                 if let hex = n.colorHex {
                     return Color(hex: hex)
                 }
+                // If this node is a direct root child, cycle color by its index
+                if let rootId = state.rootNodeId,
+                   let root = state.nodes[rootId],
+                   let idx = root.childrenIds.firstIndex(of: cid) {
+                    return defaultColors[idx % defaultColors.count]
+                }
                 current = n.parentId
             } else { break }
-        }
-        // fallback: use index of root child
-        if let rootId = state.rootNodeId,
-           let root = state.nodes[rootId],
-           let idx = root.childrenIds.firstIndex(of: nodeId) {
-            return defaultColors[idx % defaultColors.count]
         }
         return .blue
     }
@@ -98,6 +101,22 @@ class ProjectStore {
             current = state.nodes[cid.uuidString]?.parentId
         }
         return path
+    }
+
+    func allTransitivePredecessors(of nodeId: UUID) -> Set<UUID> {
+        var result = Set<UUID>()
+        var queue = [nodeId]
+        while !queue.isEmpty {
+            let current = queue.removeFirst()
+            guard let node = state.nodes[current.uuidString] else { continue }
+            if let pid = node.parentId, !result.contains(pid) {
+                result.insert(pid); queue.append(pid)
+            }
+            for depId in node.dependencyIds where !result.contains(depId) {
+                result.insert(depId); queue.append(depId)
+            }
+        }
+        return result
     }
 
     func dependents(of nodeId: UUID) -> Set<UUID> {
@@ -163,10 +182,28 @@ class ProjectStore {
         return Date().timeIntervalSince(start)
     }
 
+    private func pushUndo() {
+        undoStack.append(state)
+        if undoStack.count > 50 { undoStack.removeFirst() }
+    }
+
+    func undo() {
+        guard let prev = undoStack.popLast() else { return }
+        state = prev
+        scheduleSave()
+    }
+
+    func updateSettings(_ block: (inout ProjectSettings) -> Void) {
+        block(&state.settings)
+        state.updatedAt = Date()
+        scheduleSave()
+    }
+
     // MARK: - Mutations
 
     @discardableResult
     func createNode(title: String, type: NodeType = .task, parentId: UUID? = nil) -> ProjectNode {
+        pushUndo()
         let node = ProjectNode(title: title, type: type, parentId: parentId)
         state.nodes[node.id.uuidString] = node
 
@@ -184,13 +221,20 @@ class ProjectStore {
             state.nodes[node.id.uuidString]?.outputMilestoneId = ms.id
         }
 
-        // Non-milestone child of a group with outputMilestoneId → keep milestone last + milestone depends on new node
+        // Non-milestone child of a group with outputMilestoneId → keep milestone last
+        // For group children, the parent milestone depends on the CHILD'S milestone (not the child group itself)
         if type != .milestone, let pid = parentId,
            let milestoneId = state.nodes[pid.uuidString]?.outputMilestoneId {
             state.nodes[pid.uuidString]?.childrenIds.removeAll { $0 == milestoneId }
             state.nodes[pid.uuidString]?.childrenIds.append(milestoneId)
-            if !(state.nodes[milestoneId.uuidString]?.dependencyIds.contains(node.id) ?? false) {
-                state.nodes[milestoneId.uuidString]?.dependencyIds.append(node.id)
+            let depTarget: UUID
+            if type == .group, let childMilestoneId = state.nodes[node.id.uuidString]?.outputMilestoneId {
+                depTarget = childMilestoneId
+            } else {
+                depTarget = node.id
+            }
+            if !(state.nodes[milestoneId.uuidString]?.dependencyIds.contains(depTarget) ?? false) {
+                state.nodes[milestoneId.uuidString]?.dependencyIds.append(depTarget)
                 state.nodes[milestoneId.uuidString]?.updatedAt = Date()
             }
         }
@@ -199,6 +243,35 @@ class ProjectStore {
         if type == .milestone, let pid = parentId,
            let parentNode = state.nodes[pid.uuidString], parentNode.type == .group {
             state.nodes[pid.uuidString]?.outputMilestoneId = node.id
+        }
+
+        // Nested milestone: if parent is a non-group node inside a group, update that group's milestone
+        // so the new node (not the parent) is what the milestone waits on.
+        if type != .milestone, let pid = parentId,
+           let parent = state.nodes[pid.uuidString], parent.type != .group {
+            var ancestor: UUID? = parent.parentId
+            while let aid = ancestor {
+                if let anc = state.nodes[aid.uuidString], anc.type == .group {
+                    if let msId = anc.outputMilestoneId {
+                        // Parent is no longer a leaf — remove it from milestone's deps
+                        state.nodes[msId.uuidString]?.dependencyIds.removeAll { $0 == pid }
+                        // For a new group, use its milestone as the dep target
+                        let depTarget: UUID
+                        if type == .group,
+                           let childMsId = state.nodes[node.id.uuidString]?.outputMilestoneId {
+                            depTarget = childMsId
+                        } else {
+                            depTarget = node.id
+                        }
+                        if !(state.nodes[msId.uuidString]?.dependencyIds.contains(depTarget) ?? false) {
+                            state.nodes[msId.uuidString]?.dependencyIds.append(depTarget)
+                            state.nodes[msId.uuidString]?.updatedAt = Date()
+                        }
+                    }
+                    break
+                }
+                ancestor = state.nodes[aid.uuidString]?.parentId
+            }
         }
 
         state.updatedAt = Date()
@@ -221,6 +294,7 @@ class ProjectStore {
 
     func deleteNode(id: UUID) {
         guard let node = state.nodes[id.uuidString] else { return }
+        pushUndo()
         let title = node.title
 
         // Remove from parent's children
@@ -254,6 +328,7 @@ class ProjectStore {
 
     func setStatus(nodeId: UUID, status: NodeStatus) {
         guard let node = state.nodes[nodeId.uuidString] else { return }
+        pushUndo()
         let old = node.status
         state.nodes[nodeId.uuidString]?.status = status
         state.nodes[nodeId.uuidString]?.updatedAt = Date()
@@ -437,6 +512,7 @@ class ProjectStore {
 
     func moveNode(id: UUID, newParentId: UUID?) {
         guard var node = state.nodes[id.uuidString] else { return }
+        pushUndo()
 
         // Remove from old parent
         if let oldPid = node.parentId {
@@ -469,6 +545,7 @@ class ProjectStore {
         guard state.nodes[nodeId.uuidString] != nil,
               state.nodes[depId.uuidString] != nil,
               !state.nodes[nodeId.uuidString]!.dependencyIds.contains(depId) else { return }
+        pushUndo()
         state.nodes[nodeId.uuidString]?.dependencyIds.append(depId)
         state.nodes[nodeId.uuidString]?.updatedAt = Date()
         state.updatedAt = Date()
@@ -479,6 +556,7 @@ class ProjectStore {
     }
 
     func removeDependency(nodeId: UUID, depId: UUID) {
+        pushUndo()
         state.nodes[nodeId.uuidString]?.dependencyIds.removeAll { $0 == depId }
         state.nodes[nodeId.uuidString]?.updatedAt = Date()
         state.updatedAt = Date()
@@ -505,6 +583,19 @@ class ProjectStore {
 
     func forceSave() {
         try? PersistenceManager.save(state, to: projectStateURL)
+    }
+}
+
+// MARK: - FocusedValue support
+
+private struct ProjectStoreFocusedKey: FocusedValueKey {
+    typealias Value = ProjectStore
+}
+
+extension FocusedValues {
+    var projectStore: ProjectStore? {
+        get { self[ProjectStoreFocusedKey.self] }
+        set { self[ProjectStoreFocusedKey.self] = newValue }
     }
 }
 

@@ -1,5 +1,10 @@
 import Foundation
 
+struct ProjectSettings: Codable {
+    var workerCount: Int = 1
+    var projectDescription: String = ""
+}
+
 struct ProjectState: Codable {
     var nodes: [String: ProjectNode]
     var rootNodeId: String?
@@ -7,6 +12,7 @@ struct ProjectState: Codable {
     var version: Int
     let createdAt: Date
     var updatedAt: Date
+    var settings: ProjectSettings = ProjectSettings()
 
     init() {
         self.nodes = [:]
@@ -15,5 +21,6 @@ struct ProjectState: Codable {
         self.version = 1
         self.createdAt = Date()
         self.updatedAt = Date()
+        self.settings = ProjectSettings()
     }
 }

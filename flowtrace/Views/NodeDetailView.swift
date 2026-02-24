@@ -7,6 +7,8 @@ struct NodeDetailView: View {
     @State private var selectedColor = Color.blue
     @State private var depSearchText = ""
     @State private var showDepPicker = false
+    @State private var estimateHoursInput: Int = 0
+    @State private var estimateMinutesInput: Int = 0
 
     var node: ProjectNode? { store.node(for: nodeId) }
 
@@ -32,6 +34,8 @@ struct NodeDetailView: View {
                 }
                 .padding(16)
             }
+            .onAppear { loadEstimate(node) }
+            .onChange(of: nodeId) { if let n = store.node(for: nodeId) { loadEstimate(n) } }
         } else {
             VStack {
                 Spacer()
@@ -111,7 +115,59 @@ struct NodeDetailView: View {
 
     private var colorPickerPopover: some View {
         VStack(spacing: 12) {
-            ColorPicker("Node Color", selection: $selectedColor, supportsOpacity: false)
+            Text("Choose Color")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Color presets in a scrollable grid
+            let presets: [Color] = [
+                .red, .orange, .yellow, .green, .mint, .teal,
+                .cyan, .blue, .indigo, .purple, .pink, .brown,
+                Color(red: 1, green: 0.42, blue: 0.42),   // coral
+                Color(red: 0.31, green: 0.78, blue: 0.47), // emerald
+                Color(red: 0.27, green: 0.71, blue: 0.82), // sky
+                Color(red: 0.59, green: 0.80, blue: 0.71), // sage
+                Color(red: 1, green: 0.91, blue: 0.42),    // lemon
+                Color(red: 0.87, green: 0.63, blue: 0.87), // lavender
+                Color(red: 1, green: 0.6, blue: 0.8),      // rose
+                .gray
+            ]
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(30), spacing: 6), count: 8), spacing: 6) {
+                    ForEach(0..<presets.count, id: \.self) { i in
+                        Circle()
+                            .fill(presets[i])
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Circle().stroke(
+                                    store.resolvedColor(for: nodeId) == presets[i]
+                                        ? Color.primary : Color.primary.opacity(0.15),
+                                    lineWidth: 1.5)
+                            )
+                            .onTapGesture {
+                                store.updateNode(id: nodeId) { $0.colorHex = presets[i].hexString }
+                                showColorPicker = false
+                            }
+                    }
+                }
+                .padding(2)
+            }
+            .frame(height: 82)
+
+            Divider()
+            ColorPicker("Custom", selection: $selectedColor, supportsOpacity: false)
+                .labelsHidden()
+                .overlay(
+                    HStack {
+                        Text("Custom Color")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
+                    .padding(.leading, 4)
+                )
             HStack {
                 Button("Reset") {
                     store.updateNode(id: nodeId) { $0.colorHex = nil }
@@ -126,7 +182,7 @@ struct NodeDetailView: View {
             }
         }
         .padding(16)
-        .frame(width: 220)
+        .frame(width: 296)
     }
 
     // MARK: - Description
@@ -159,7 +215,6 @@ struct NodeDetailView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Estimate").font(.caption).foregroundStyle(.secondary)
-                    // Change 3: groups show computed sum (read-only); other nodes keep the text field
                     if node.type == .group {
                         if let sum = store.effectiveTimeEstimate(for: nodeId) {
                             HStack(spacing: 4) {
@@ -174,15 +229,18 @@ struct NodeDetailView: View {
                                 .foregroundStyle(.tertiary)
                         }
                     } else {
-                        HStack {
-                            TextField("hours", value: Binding(
-                                get: { node.timeEstimate ?? 0 },
-                                set: { newVal in store.updateNode(id: nodeId) { $0.timeEstimate = newVal > 0 ? newVal : nil } }
-                            ), format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 70)
-                            Text("h").foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            TextField("0", value: $estimateHoursInput, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 50)
+                            Text("h")
+                            TextField("0", value: $estimateMinutesInput, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 44)
+                            Text("m")
                         }
+                        .onChange(of: estimateHoursInput) { updateEstimate() }
+                        .onChange(of: estimateMinutesInput) { updateEstimate() }
                     }
                 }
 
@@ -208,6 +266,18 @@ struct NodeDetailView: View {
                 .padding(10)
                 .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
         }
+    }
+
+    private func loadEstimate(_ node: ProjectNode) {
+        let h = node.timeEstimate ?? 0
+        estimateHoursInput = Int(h)
+        estimateMinutesInput = Int(((h - floor(h)) * 60).rounded())
+    }
+
+    private func updateEstimate() {
+        let mins = max(0, min(59, estimateMinutesInput))
+        let total = Double(estimateHoursInput) + Double(mins) / 60.0
+        store.updateNode(id: nodeId) { $0.timeEstimate = total > 0 ? total : nil }
     }
 
     // MARK: - Complexity
@@ -258,54 +328,80 @@ struct NodeDetailView: View {
         }
     }
 
-    // MARK: - Dependencies
+    // MARK: - Dependencies (In / Out)
 
     private func dependenciesSection(_ node: ProjectNode) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Label("Dependencies", systemImage: "arrow.triangle.branch")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    showDepPicker.toggle()
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.plain)
-                .font(.caption)
-            }
-
-            if node.dependencyIds.isEmpty {
-                Text("No dependencies")
+        VStack(alignment: .leading, spacing: 10) {
+            // --- Predecessors (In) ---
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Predecessors (In)", systemImage: "arrow.triangle.branch")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        showDepPicker.toggle()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(.plain)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } else {
-                ForEach(node.dependencyIds, id: \.self) { depId in
-                    if let depNode = store.node(for: depId) {
-                        HStack {
-                            Image(systemName: depNode.status.icon)
-                                .foregroundStyle(depNode.status == .done ? .green : .secondary)
-                                .font(.caption)
-                            Text(depNode.title)
-                                .font(.body)
-                            Spacer()
-                            Button {
-                                store.removeDependency(nodeId: nodeId, depId: depId)
-                            } label: {
-                                Image(systemName: "xmark")
+                }
+
+                if node.dependencyIds.isEmpty {
+                    Text("No prerequisites")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    ForEach(node.dependencyIds, id: \.self) { depId in
+                        if let depNode = store.node(for: depId) {
+                            HStack {
+                                Image(systemName: depNode.status.icon)
+                                    .foregroundStyle(depNode.status == .done ? .green : .secondary)
                                     .font(.caption)
+                                Text(depNode.title)
+                                    .font(.body)
+                                Spacer()
+                                Button {
+                                    store.removeDependency(nodeId: nodeId, depId: depId)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 2)
                         }
-                        .padding(.vertical, 2)
                     }
                 }
+
+                if showDepPicker {
+                    depPickerView(currentNode: node)
+                }
             }
 
-            if showDepPicker {
-                depPickerView(currentNode: node)
+            // --- Dependents (Out) ---
+            let outNodes = store.dependents(of: nodeId)
+            if !outNodes.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Dependents (Out)", systemImage: "arrow.forward.circle")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(outNodes), id: \.self) { depId in
+                        if let depNode = store.node(for: depId) {
+                            HStack {
+                                Image(systemName: depNode.status.icon)
+                                    .foregroundStyle(depNode.status == .done ? .green : .secondary)
+                                    .font(.caption)
+                                Text(depNode.title)
+                                    .font(.body)
+                                Spacer()
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
             }
         }
     }

@@ -35,6 +35,12 @@ struct WorkspaceView: View {
             }
         }
         .navigationTitle(store.projectName)
+        .focusedValue(\.projectStore, store)
+        .sheet(isPresented: $store.showProjectSettings) {
+            NavigationStack {
+                ProjectSettingsSheet(store: store)
+            }
+        }
     }
 
     @ViewBuilder
@@ -69,13 +75,15 @@ struct WorkspaceView: View {
             .frame(maxWidth: 420)
         }
 
-        // Add node button
+        // Add node button — creates child of selected node (or root child if none selected)
         ToolbarItem(placement: .primaryAction) {
             Button {
-                if let rootId = store.state.rootNodeId.flatMap({ UUID(uuidString: $0) }) {
-                    store.createNode(title: "New Task", type: .task, parentId: rootId)
-                } else {
+                if store.state.rootNodeId == nil {
                     store.createNode(title: "Project Root", type: .group)
+                } else {
+                    let parentId = store.selectedNodeId
+                        ?? store.state.rootNodeId.flatMap { UUID(uuidString: $0) }
+                    store.createNode(title: "New Task", type: .task, parentId: parentId)
                 }
             } label: {
                 Label("Add Node", systemImage: "plus")
@@ -92,6 +100,55 @@ struct WorkspaceView: View {
                 Label("Snapshot", systemImage: "camera")
             }
             .help("Save snapshot")
+        }
+
+        // Project settings
+        ToolbarItem(placement: .automatic) {
+            Button {
+                store.showProjectSettings = true
+            } label: {
+                Label("Settings", systemImage: "gear")
+            }
+            .help("Project Settings (⌘⇧,)")
+        }
+    }
+}
+
+private struct ProjectSettingsSheet: View {
+    @Bindable var store: ProjectStore
+
+    var body: some View {
+        Form {
+            Section("Team") {
+                Stepper(
+                    "Workers: \(store.state.settings.workerCount)",
+                    value: Binding(
+                        get: { store.state.settings.workerCount },
+                        set: { val in store.updateSettings { $0.workerCount = max(1, val) } }
+                    ),
+                    in: 1...20
+                )
+                if store.state.settings.workerCount == 1 {
+                    Text("Sequential mode: tasks in a group run one after another")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Section("Description") {
+                TextEditor(text: Binding(
+                    get: { store.state.settings.projectDescription },
+                    set: { val in store.updateSettings { $0.projectDescription = val } }
+                ))
+                .frame(height: 80)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 380, height: 280)
+        .navigationTitle("Project Settings")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { store.showProjectSettings = false }
+            }
         }
     }
 }

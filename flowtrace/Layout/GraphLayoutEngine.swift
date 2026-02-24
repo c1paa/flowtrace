@@ -61,11 +61,20 @@ class GraphLayoutEngine {
             return nodeW
         }
 
+        // For groups with output milestone, exclude milestone from horizontal layout
+        let milestoneId: UUID? = (node.type == .group) ? node.outputMilestoneId : nil
+        let horizontalChildren = node.childrenIds.filter { $0 != milestoneId }
+
+        // Still compute milestone subtree width
+        if let msId = milestoneId {
+            computeSubtreeWidths(nodeId: msId, nodes: nodes, widths: &widths)
+        }
+
         var childrenTotalWidth: CGFloat = 0
-        for (idx, childId) in node.childrenIds.enumerated() {
+        for (idx, childId) in horizontalChildren.enumerated() {
             let w = computeSubtreeWidths(nodeId: childId, nodes: nodes, widths: &widths)
             childrenTotalWidth += w
-            if idx < node.childrenIds.count - 1 {
+            if idx < horizontalChildren.count - 1 {
                 childrenTotalWidth += hGap
             }
         }
@@ -89,11 +98,15 @@ class GraphLayoutEngine {
 
         guard !node.childrenIds.isEmpty else { return }
 
-        // Lay out children side by side
+        // For groups with output milestone, exclude milestone from horizontal layout
+        let milestoneId: UUID? = (node.type == .group) ? node.outputMilestoneId : nil
+        let horizontalChildren = node.childrenIds.filter { $0 != milestoneId }
+
+        // Lay out non-milestone children side by side at childY
         var childX = x
         let childY = y + expandedNodeH + vGap
 
-        for childId in node.childrenIds {
+        for childId in horizontalChildren {
             let childW = widths[childId] ?? nodeW
             assignPositions(nodeId: childId, nodes: nodes,
                             widths: widths,
@@ -101,6 +114,27 @@ class GraphLayoutEngine {
                             expandedNodeH: expandedNodeH,
                             positions: &positions)
             childX += childW + hGap
+        }
+
+        // Place output milestone one level below siblings, centered over the group
+        if let msId = milestoneId {
+            let msY = childY + expandedNodeH + vGap
+            let msNodeX = x + (subtreeW - nodeW) / 2
+            positions[msId] = CGPoint(x: msNodeX, y: msY)
+            // Handle milestone's own children if any
+            if let msNode = nodes[msId.uuidString], !msNode.childrenIds.isEmpty {
+                var msChildX = msNodeX
+                let msChildY = msY + expandedNodeH + vGap
+                for childId in msNode.childrenIds {
+                    let childW = widths[childId] ?? nodeW
+                    assignPositions(nodeId: childId, nodes: nodes,
+                                    widths: widths,
+                                    x: msChildX, y: msChildY,
+                                    expandedNodeH: expandedNodeH,
+                                    positions: &positions)
+                    msChildX += childW + hGap
+                }
+            }
         }
     }
 }

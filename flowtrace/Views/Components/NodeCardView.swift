@@ -12,7 +12,14 @@ struct NodeCardView: View {
     // Change 5: Group progress
     var groupCompleted: Int = 0
     var groupTotal: Int = 0
+    // Inline rename
+    var isInlineEditing: Bool = false
+    var onInlineCommit: ((String) -> Void)? = nil
+    var onInlineCancel: (() -> Void)? = nil
     var onStatusTap: (() -> Void)? = nil
+
+    @State private var editTitle = ""
+    @FocusState private var titleFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -21,9 +28,19 @@ struct NodeCardView: View {
                 Circle()
                     .fill(color)
                     .frame(width: 10, height: 10)
-                Text(node.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
+                if isInlineEditing {
+                    TextField("Name", text: $editTitle)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, weight: .medium))
+                        .focused($titleFocused)
+                        .onSubmit { onInlineCommit?(editTitle) }
+                        .onExitCommand { onInlineCancel?() }
+                        .onAppear { editTitle = node.title; titleFocused = true }
+                } else {
+                    Text(node.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 4)
                 Image(systemName: node.type.icon)
                     .font(.system(size: 11))
