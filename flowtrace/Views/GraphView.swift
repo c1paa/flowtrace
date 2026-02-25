@@ -20,6 +20,7 @@ struct GraphView: View {
     @State private var linkSourceId: UUID?
     // Selected dep edge for deletion
     @State private var selectedEdge: (from: UUID, to: UUID)?
+    @FocusState private var graphFocused: Bool
     private let engine = GraphLayoutEngine()
 
     var body: some View {
@@ -88,29 +89,32 @@ struct GraphView: View {
                     }
                 }
             }
+            .focusable()
+            .focused($graphFocused)
+            .focusEffectDisabled()
+            .onDeleteCommand {
+                if let edge = selectedEdge {
+                    store.removeDependency(nodeId: edge.to, depId: edge.from)
+                    selectedEdge = nil
+                    recomputeLayout()
+                } else if let id = store.selectedNodeId {
+                    store.deleteNode(id: id)
+                    recomputeLayout()
+                }
+            }
+            .onExitCommand {
+                selectedEdge = nil
+                store.selectedNodeId = nil
+                if isLinkMode {
+                    isLinkMode = false
+                    linkSourceId = nil
+                }
+            }
         }
         .onAppear { recomputeLayout() }
         .onChange(of: store.state.nodes.count) { recomputeLayout() }
         .onChange(of: store.state.rootNodeId) { recomputeLayout() }
         .onChange(of: graphExpandedMode) { recomputeLayout() }
-        .onDeleteCommand {
-            if let edge = selectedEdge {
-                store.removeDependency(nodeId: edge.to, depId: edge.from)
-                selectedEdge = nil
-                recomputeLayout()
-            } else if let id = store.selectedNodeId {
-                store.deleteNode(id: id)
-                recomputeLayout()
-            }
-        }
-        .onExitCommand {
-            selectedEdge = nil
-            store.selectedNodeId = nil
-            if isLinkMode {
-                isLinkMode = false
-                linkSourceId = nil
-            }
-        }
     }
 
     // MARK: - Dep edge hit areas
@@ -123,6 +127,7 @@ struct GraphView: View {
                 .contentShape(edge.path.strokedPath(StrokeStyle(lineWidth: 20)))
                 .onTapGesture {
                     guard !isLinkMode else { return }
+                    graphFocused = true
                     let key = (from: edge.fromId, to: edge.toId)
                     if selectedEdge?.from == key.from && selectedEdge?.to == key.to {
                         selectedEdge = nil
@@ -140,6 +145,14 @@ struct GraphView: View {
         var edges: [DepEdgeInfo] = []
         for (_, node) in store.state.nodes {
             for depId in node.dependencyIds {
+                // Skip auto-created deps to group output milestones
+                if node.type == .milestone,
+                   let parentId = node.parentId,
+                   let parent = store.state.nodes[parentId.uuidString],
+                   parent.type == .group,
+                   parent.outputMilestoneId == node.id {
+                    continue
+                }
                 guard let fromPos = layout.positions[depId],
                       let toPos = layout.positions[node.id] else { continue }
 
@@ -267,6 +280,7 @@ struct GraphView: View {
                 )
                 .position(x: pos.x + 100, y: pos.y + 32)
                 .onTapGesture {
+                    graphFocused = true
                     if isLinkMode {
                         if let sourceId = linkSourceId {
                             if sourceId != node.id {
@@ -424,6 +438,14 @@ struct GraphView: View {
         // Arrow points FROM prerequisite (depId) TO dependent (node)
         for (_, node) in store.state.nodes {
             for depId in node.dependencyIds {
+                // Auto-created deps to group output milestones are drawn gray in convergence section
+                if node.type == .milestone,
+                   let parentId = node.parentId,
+                   let parent = store.state.nodes[parentId.uuidString],
+                   parent.type == .group,
+                   parent.outputMilestoneId == node.id {
+                    continue
+                }
                 guard let fromPos = layout.positions[depId],
                       let toPos = layout.positions[node.id] else { continue }
 
@@ -459,16 +481,24 @@ struct GraphView: View {
             }
         }
 
-        // Milestone convergence: draw from each non-milestone child (or child's milestone) to group's output milestone
+        // Milestone convergence: draw from the milestone's actual leaf dependants (auto-maintained by createNode)
         for (_, node) in store.state.nodes {
             guard node.type == .group, let milestoneId = node.outputMilestoneId else { continue }
+            guard let milestoneNode = store.state.nodes[milestoneId.uuidString] else { continue }
             guard let milestonePos = layout.positions[milestoneId] else { continue }
 
-            for childId in node.childrenIds {
-                guard let childNode = store.state.nodes[childId.uuidString],
-                      childNode.type != .milestone else { continue }
+            // Leaf filter: only deps not relied upon by another dep in the same list
+            let depIds = milestoneNode.dependencyIds
+            let leafDepIds = depIds.filter { depId in
+                !depIds.contains { otherId in
+                    otherId != depId &&
+                    (store.state.nodes[otherId.uuidString]?.dependencyIds.contains(depId) ?? false)
+                }
+            }
+            for childId in leafDepIds {
+                guard let childNode = store.state.nodes[childId.uuidString] else { continue }
 
-                // For group children with their own milestone, draw from that milestone
+                // If the dep is itself a group, draw from its output milestone
                 let sourceId: UUID
                 if childNode.type == .group,
                    let childMsId = childNode.outputMilestoneId,

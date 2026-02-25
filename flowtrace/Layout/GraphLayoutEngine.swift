@@ -48,6 +48,18 @@ class GraphLayoutEngine {
         return LayoutResult(positions: normalizedPositions, canvasSize: canvasSize)
     }
 
+    /// Returns the Y of the top of the deepest node in the subtree rooted at nodeId.
+    private func maxDescendantY(nodeId: UUID, nodes: [String: ProjectNode],
+                                positions: [UUID: CGPoint]) -> CGFloat {
+        guard let pos = positions[nodeId] else { return 0 }
+        guard let node = nodes[nodeId.uuidString], !node.childrenIds.isEmpty else {
+            return pos.y
+        }
+        return node.childrenIds.map {
+            maxDescendantY(nodeId: $0, nodes: nodes, positions: positions)
+        }.max() ?? pos.y
+    }
+
     @discardableResult
     private func computeSubtreeWidths(nodeId: UUID, nodes: [String: ProjectNode],
                                       widths: inout [UUID: CGFloat]) -> CGFloat {
@@ -116,9 +128,11 @@ class GraphLayoutEngine {
             childX += childW + hGap
         }
 
-        // Place output milestone one level below siblings, centered over the group
+        // Place output milestone below the deepest descendant, centered over the group
         if let msId = milestoneId {
-            let msY = childY + expandedNodeH + vGap
+            let deepestY = horizontalChildren.isEmpty ? childY :
+                horizontalChildren.map { maxDescendantY(nodeId: $0, nodes: nodes, positions: positions) }.max() ?? childY
+            let msY = deepestY + expandedNodeH + vGap
             let msNodeX = x + (subtreeW - nodeW) / 2
             positions[msId] = CGPoint(x: msNodeX, y: msY)
             // Handle milestone's own children if any

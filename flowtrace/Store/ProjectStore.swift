@@ -41,7 +41,9 @@ class ProjectStore {
 
     private var saveTask: Task<Void, Never>?
     private var undoStack: [ProjectState] = []
+    private var redoStack: [ProjectState] = []
     var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
 
     // MARK: - Derived URLs
     var projectStateURL: URL { projectURL.appendingPathComponent("project.json") }
@@ -185,11 +187,22 @@ class ProjectStore {
     private func pushUndo() {
         undoStack.append(state)
         if undoStack.count > 50 { undoStack.removeFirst() }
+        redoStack.removeAll()
     }
 
     func undo() {
         guard let prev = undoStack.popLast() else { return }
+        redoStack.append(state)
+        if redoStack.count > 50 { redoStack.removeFirst() }
         state = prev
+        scheduleSave()
+    }
+
+    func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(state)
+        if undoStack.count > 50 { undoStack.removeFirst() }
+        state = next
         scheduleSave()
     }
 
@@ -201,13 +214,34 @@ class ProjectStore {
 
     // MARK: - Mutations
 
+    /// Follows the last task-typed child recursively to find the tail of a sequential chain.
+    private func chainTail(of nodeId: UUID) -> UUID {
+        guard let node = state.nodes[nodeId.uuidString] else { return nodeId }
+        let taskChildren = node.childrenIds.filter { state.nodes[$0.uuidString]?.type == .task }
+        guard let lastChildId = taskChildren.last else { return nodeId }
+        return chainTail(of: lastChildId)
+    }
+
     @discardableResult
     func createNode(title: String, type: NodeType = .task, parentId: UUID? = nil) -> ProjectNode {
         pushUndo()
-        let node = ProjectNode(title: title, type: type, parentId: parentId)
+
+        // Sequential chain: if parent is a task that already has task children,
+        // follow the chain tail so the new node comes after existing ones, not parallel.
+        let effectiveParentId: UUID?
+        if let pid = parentId,
+           let parent = state.nodes[pid.uuidString],
+           parent.type == .task,
+           parent.childrenIds.contains(where: { state.nodes[$0.uuidString]?.type == .task }) {
+            effectiveParentId = chainTail(of: pid)
+        } else {
+            effectiveParentId = parentId
+        }
+
+        let node = ProjectNode(title: title, type: type, parentId: effectiveParentId)
         state.nodes[node.id.uuidString] = node
 
-        if let pid = parentId {
+        if let pid = effectiveParentId {
             state.nodes[pid.uuidString]?.childrenIds.append(node.id)
         } else if state.rootNodeId == nil {
             state.rootNodeId = node.id.uuidString
@@ -223,7 +257,7 @@ class ProjectStore {
 
         // Non-milestone child of a group with outputMilestoneId → keep milestone last
         // For group children, the parent milestone depends on the CHILD'S milestone (not the child group itself)
-        if type != .milestone, let pid = parentId,
+        if type != .milestone, let pid = effectiveParentId,
            let milestoneId = state.nodes[pid.uuidString]?.outputMilestoneId {
             state.nodes[pid.uuidString]?.childrenIds.removeAll { $0 == milestoneId }
             state.nodes[pid.uuidString]?.childrenIds.append(milestoneId)
@@ -240,14 +274,14 @@ class ProjectStore {
         }
 
         // Auto-detect: if a milestone is manually added to a group, mark it as the group's output milestone
-        if type == .milestone, let pid = parentId,
+        if type == .milestone, let pid = effectiveParentId,
            let parentNode = state.nodes[pid.uuidString], parentNode.type == .group {
             state.nodes[pid.uuidString]?.outputMilestoneId = node.id
         }
 
         // Nested milestone: if parent is a non-group node inside a group, update that group's milestone
         // so the new node (not the parent) is what the milestone waits on.
-        if type != .milestone, let pid = parentId,
+        if type != .milestone, let pid = effectiveParentId,
            let parent = state.nodes[pid.uuidString], parent.type != .group {
             var ancestor: UUID? = parent.parentId
             while let aid = ancestor {

@@ -35,7 +35,14 @@ struct WorkspaceView: View {
             }
         }
         .navigationTitle(store.projectName)
-        .focusedValue(\.projectStore, store)
+        .focusedSceneValue(\.projectStore, store)
+        .onExitCommand {
+            if store.showProjectSettings {
+                store.showProjectSettings = false
+            } else {
+                store.selectedNodeId = nil
+            }
+        }
         .sheet(isPresented: $store.showProjectSettings) {
             NavigationStack {
                 ProjectSettingsSheet(store: store)
