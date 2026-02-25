@@ -222,6 +222,78 @@ class ProjectStore {
         return chainTail(of: lastChildId)
     }
 
+    // MARK: - Insert node after (smart gap or leaf insertion)
+
+    /// Inserts a new node after `nodeId`:
+    /// - Has non-milestone children + inserting Task → task goes between nodeId and its children (children move into new task).
+    /// - Has non-milestone children + inserting Group → empty group inserted after nodeId; old children continue AFTER group done (as children of M_G, not inside the group).
+    /// - No non-milestone children → creates as a direct child of nodeId (leaf; milestone dep updates handled by createNode).
+    @discardableResult
+    func insertNodeAfter(nodeId: UUID, title: String, type: NodeType) -> ProjectNode {
+        guard let targetNode = state.nodes[nodeId.uuidString] else {
+            return createNode(title: title, type: type, parentId: nodeId)
+        }
+
+        let childrenToMove = targetNode.childrenIds.filter {
+            state.nodes[$0.uuidString]?.type != .milestone
+        }
+
+        guard !childrenToMove.isEmpty else {
+            // Leaf: createNode handles milestone dep updates (removes nodeId from ancestor deps, adds new node/milestone)
+            return createNode(title: title, type: type, parentId: nodeId)
+        }
+
+        // Gap insertion
+        pushUndo()
+        let newNode = ProjectNode(title: title, type: type, parentId: nodeId)
+        state.nodes[newNode.id.uuidString] = newNode
+        let newNodeId = newNode.id
+
+        if type == .group {
+            // Group is created EMPTY. Old children continue AFTER group done (as children of M_G).
+            // Bypasses createNode to avoid incorrect ancestor-milestone dep updates — the chain tail is
+            // unchanged (it is still reachable through M_G → old children), so no dep rewiring is needed.
+            let ms = ProjectNode(title: "\(title) Done", type: .milestone, parentId: newNodeId)
+            state.nodes[ms.id.uuidString] = ms
+            state.nodes[newNodeId.uuidString]?.childrenIds = [ms.id]
+            state.nodes[newNodeId.uuidString]?.outputMilestoneId = ms.id
+            let msId = ms.id
+
+            // Detach old children from target, reparent to M_G (they come after group done)
+            state.nodes[nodeId.uuidString]?.childrenIds.removeAll { childrenToMove.contains($0) }
+            for childId in childrenToMove {
+                state.nodes[childId.uuidString]?.parentId = msId
+            }
+            state.nodes[msId.uuidString]?.childrenIds.append(contentsOf: childrenToMove)
+
+            // Attach new group to target
+            state.nodes[nodeId.uuidString]?.childrenIds.append(newNodeId)
+
+        } else {
+            // Task (or other): insert in gap — old children move into the new node
+            state.nodes[nodeId.uuidString]?.childrenIds.removeAll { childrenToMove.contains($0) }
+            for childId in childrenToMove {
+                state.nodes[childId.uuidString]?.parentId = newNodeId
+            }
+            state.nodes[newNodeId.uuidString]?.childrenIds.append(contentsOf: childrenToMove)
+
+            // Attach new node to target (keep target's own milestone last if present)
+            if let milestoneId = state.nodes[nodeId.uuidString]?.outputMilestoneId {
+                state.nodes[nodeId.uuidString]?.childrenIds.removeAll { $0 == milestoneId }
+                state.nodes[nodeId.uuidString]?.childrenIds.append(newNodeId)
+                state.nodes[nodeId.uuidString]?.childrenIds.append(milestoneId)
+            } else {
+                state.nodes[nodeId.uuidString]?.childrenIds.append(newNodeId)
+            }
+        }
+
+        state.updatedAt = Date()
+        let event = Event(type: .nodeCreated, nodeId: newNodeId.uuidString,
+                         summary: "Created \(type.rawValue): \(title)")
+        appendEventAndSave(event)
+        return state.nodes[newNodeId.uuidString]!
+    }
+
     @discardableResult
     func createNode(title: String, type: NodeType = .task, parentId: UUID? = nil) -> ProjectNode {
         pushUndo()

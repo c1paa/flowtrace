@@ -162,13 +162,27 @@ struct OutlineNodeRow: View {
 
     @ViewBuilder
     private func contextMenuItems(for node: ProjectNode) -> some View {
-        Button("Add Child Task") {
-            store.createNode(title: "New Task", type: .task, parentId: node.id)
-            store.updateNode(id: node.id) { $0.isExpanded = true }
-        }
-        Button("Add Child Group") {
-            store.createNode(title: "New Group", type: .group, parentId: node.id)
-            store.updateNode(id: node.id) { $0.isExpanded = true }
+        if node.type == .group {
+            // Group: add task/subgroup inside the group
+            Button("Add Child Task") {
+                store.createNode(title: "New Task", type: .task, parentId: node.id)
+                store.updateNode(id: node.id) { $0.isExpanded = true }
+            }
+            Button("Add Child Group") {
+                store.createNode(title: "New Group", type: .group, parentId: node.id)
+                store.updateNode(id: node.id) { $0.isExpanded = true }
+            }
+        } else {
+            // Task / Milestone / Decision: insert after this node
+            // If has non-milestone children → inserts in gap; otherwise adds as leaf child
+            Button("Add Next Task") {
+                store.insertNodeAfter(nodeId: node.id, title: "New Task", type: .task)
+                store.updateNode(id: node.id) { $0.isExpanded = true }
+            }
+            Button("Add Next Group") {
+                store.insertNodeAfter(nodeId: node.id, title: "New Group", type: .group)
+                store.updateNode(id: node.id) { $0.isExpanded = true }
+            }
         }
         Button("Add Sibling") {
             store.createNode(title: "New Task", type: .task, parentId: node.parentId)

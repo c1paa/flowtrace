@@ -307,15 +307,31 @@ struct GraphView: View {
 
     @ViewBuilder
     private func nodeContextMenu(for node: ProjectNode) -> some View {
-        Button("Add Child Task") {
-            let newNode = store.createNode(title: "New Task", type: .task, parentId: node.id)
-            recomputeLayout()
-            inlineEditingNodeId = newNode.id
-        }
-        Button("Add Child Group") {
-            let newNode = store.createNode(title: "New Group", type: .group, parentId: node.id)
-            recomputeLayout()
-            inlineEditingNodeId = newNode.id
+        if node.type == .group {
+            // Group: add task/subgroup inside the group
+            Button("Add Child Task") {
+                let newNode = store.createNode(title: "New Task", type: .task, parentId: node.id)
+                recomputeLayout()
+                inlineEditingNodeId = newNode.id
+            }
+            Button("Add Child Group") {
+                let newNode = store.createNode(title: "New Group", type: .group, parentId: node.id)
+                recomputeLayout()
+                inlineEditingNodeId = newNode.id
+            }
+        } else {
+            // Task / Milestone / Decision: insert after this node
+            // If has non-milestone children → inserts in gap; otherwise adds as leaf child
+            Button("Add Next Task") {
+                let newNode = store.insertNodeAfter(nodeId: node.id, title: "New Task", type: .task)
+                recomputeLayout()
+                inlineEditingNodeId = newNode.id
+            }
+            Button("Add Next Group") {
+                let newNode = store.insertNodeAfter(nodeId: node.id, title: "New Group", type: .group)
+                recomputeLayout()
+                inlineEditingNodeId = newNode.id
+            }
         }
         Button("Add Milestone") {
             let newNode = store.createNode(title: "Milestone", type: .milestone, parentId: node.id)
