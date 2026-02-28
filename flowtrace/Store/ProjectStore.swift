@@ -380,6 +380,33 @@ class ProjectStore {
             }
         }
 
+        // Parent is no longer a leaf — update ALL group output milestones across the tree
+        // that depended on it. This handles ancestor groups, sibling groups, etc.
+        // (The nested milestone block above only updates the first enclosing group.)
+        if type != .milestone, let pid = effectiveParentId {
+            let depTarget: UUID
+            if type == .group,
+               let childMsId = state.nodes[node.id.uuidString]?.outputMilestoneId {
+                depTarget = childMsId
+            } else {
+                depTarget = node.id
+            }
+            for key in state.nodes.keys {
+                guard let n = state.nodes[key], n.type == .milestone,
+                      let mParentId = n.parentId,
+                      let mParent = state.nodes[mParentId.uuidString],
+                      mParent.type == .group,
+                      mParent.outputMilestoneId == n.id else { continue }
+                if state.nodes[key]?.dependencyIds.contains(pid) == true {
+                    state.nodes[key]?.dependencyIds.removeAll { $0 == pid }
+                    if !(state.nodes[key]?.dependencyIds.contains(depTarget) ?? false) {
+                        state.nodes[key]?.dependencyIds.append(depTarget)
+                        state.nodes[key]?.updatedAt = Date()
+                    }
+                }
+            }
+        }
+
         state.updatedAt = Date()
         let summary = "Created \(type.label.lowercased()): \(title)"
         let event = Event(type: .nodeCreated, nodeId: node.id.uuidString, summary: summary)
